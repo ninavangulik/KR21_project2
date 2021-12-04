@@ -1,3 +1,4 @@
+from itertools import combinations
 from typing import Union
 import networkx
 from BayesNet import BayesNet
@@ -61,7 +62,62 @@ class BNReasoner:
         else:
             return False
 
+    def min_degree_order(self):
+        G = self.bn.get_interaction_graph()
+        X = self.bn.get_all_variables()
+
+        pi = []
+        for i in range(len(X)):
+            # sort variables on number of neighbors and append minimum to pi
+            dict_of_neighbors = {var: list(networkx.neighbors(G, var)) for var in X}
+            sorted_neighbors = sorted([(key, len(value)) for key, value in dict_of_neighbors.items()], key=lambda x: x[1])
+            pi.append(sorted_neighbors[0][0])
+
+            # add an edge between every pair of non-adjacent neighbors
+            if len(dict_of_neighbors[pi[-1]]) >= 2:
+                pairwise_edges = list(combinations(dict_of_neighbors[pi[-1]], 2))
+                print(pairwise_edges)
+                [G.add_edge(*pair) for pair in pairwise_edges]
+
+            # remove node from graph and variable list
+            G.remove_node(pi[-1])
+            X.remove(pi[-1])
+
+        return pi
+
+    def min_fill_order(self):
+        G = self.bn.get_interaction_graph()
+        X = self.bn.get_all_variables()
+
+        pi = []
+        for i in range(len(X)):
+            dict_of_neighbors = {var: list(networkx.neighbors(G, var)) for var in X}
+
+            edges_to_add = []
+            for var in X:
+                pairwise_edges = list(combinations(dict_of_neighbors[var], 2))
+                n_edges = sum([pair not in G.edges for pair in pairwise_edges])  # maybe add: pair[::-1] not in G_copy.edges
+                edges_to_add.append((var, n_edges))
+
+            edges_to_add = sorted(edges_to_add, key=lambda x: x[1])
+            print(edges_to_add)
+            pi.append(edges_to_add[0][0])
+
+            # add an edge between every pair of non-adjacent neighbors
+            if len(dict_of_neighbors[pi[-1]]) >= 2:
+                pairwise_edges = list(combinations(dict_of_neighbors[pi[-1]], 2))
+                [G.add_edge(*pair) for pair in pairwise_edges]
+
+            # remove node from graph and variable list
+            G.remove_node(pi[-1])
+            X.remove(pi[-1])
+
+        return pi
+
 
 if __name__ == "__main__":
     reasoner = BNReasoner(net="./testing/lecture_example.BIFXML")
-    print(reasoner.d_seperable("Sprinkler?", "Wet grass?", "Rain?"))
+    # print(reasoner.d_seperable("Sprinkler?", "Wet grass?", "Rain?"))
+    # reasoner.bn.draw_structure()
+
+    print("pi:", reasoner.min_fill_order())
