@@ -114,10 +114,62 @@ class BNReasoner:
 
         return pi
 
+    def prune_nodes(self, Q, e):
+        """ Pruning all leaf nodes not in Q or e. """
+
+        X = self.bn.get_all_variables()
+        leaf_nodes = [x for x in X if len(self.bn.get_children(x)) == 0]
+
+        nodes_to_delete = []
+        for node in leaf_nodes:
+            # check if node is part of query Q
+            if node in Q:
+                continue
+            # check if node is part of evidence e
+            elif any([(node in x) for x in e]):
+                continue
+            # if both False, than delete leaf node
+            else:
+                nodes_to_delete.append(node)
+
+        [self.bn.del_var(node) for node in nodes_to_delete]
+
+        return self
+
+    def prune_edges(self, e):
+        """ Pruning all outgoing edges from evidence nodes e. """
+
+        # Remove outgoing edges from evidence
+        edges_to_remove = {node[0]: self.bn.get_children(node[0]) for node in e}
+
+        for key, value in edges_to_remove.items():
+            for edge_node in value:
+                self.bn.del_edge((key, edge_node))
+
+        # Update CPT tables
+        cpts = self.bn.get_all_cpts()
+        for node, cpt in cpts.items():
+            if len(cpt.columns) > 2:
+                for evidence in e:
+                    if evidence[0] not in cpt.columns[-2]:
+                        if evidence[0] in cpt.columns:
+                            cpt = cpt.loc[lambda d: d[evidence[0]] == evidence[1]]
+                self.bn.update_cpt(node, cpt)
+
+        return self
+
+    def prune_network(self, Q, e):
+        self.prune_nodes(Q, e)
+        self.prune_edges(e)
+
+        return self
+
 
 if __name__ == "__main__":
     reasoner = BNReasoner(net="./testing/lecture_example.BIFXML")
-    # print(reasoner.d_seperable("Sprinkler?", "Wet grass?", "Rain?"))
-    # reasoner.bn.draw_structure()
 
-    print("pi:", reasoner.min_fill_order())
+    Q = ["Wet Grass?"]
+    e = [("Winter?", True), ("Rain?", False)]
+
+    reasoner.prune_network(Q, e)
+    print(reasoner.bn.get_all_cpts())
