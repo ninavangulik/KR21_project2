@@ -164,8 +164,114 @@ class BNReasoner:
         self.prune_edges(e)
 
         return self
+################################
+### Task 1d
+################################
 
-    def multiplying(self, A, B, C):                # input: variable/factor1, variable/factor2, variable to merge on
+    def summing_out(self, f, B):                
+        """ Sum out everything from f except for B 
+            
+            input: f, a factor
+                   B, a variable
+
+            output: f, a factor 
+        
+        """
+
+        f = f.groupby(B)['p'].sum()
+        
+        return f
+
+    def multiplying(self, A, B):                
+        """ Multiply the factors of A and B 
+        
+            input: A and B, which are either variables (e.g., 'Winter?') or factors
+
+            output: f, a factor which is a multiplication of A and B
+
+        """
+
+        if type(A) == str and type(B) == str:           # if the input is only a variable
+            cpt_A = self.bn.get_cpt(A)
+            cpt_B = self.bn.get_cpt(B)
+            C = A
+        else:                                           # if the input is already a factor
+            cpt_A = A
+            cpt_B = B
+            C = list(cpt_A.keys())[-2]
+
+        f = cpt_A.merge(cpt_B, on=C) 
+        f['p'] = f['p_x'] * f['p_y']
+        f = f.drop(columns=['p_x', 'p_y'])
+        
+        return f      
+
+    def get_path(self, Q):   
+        """ For all q in Q, get the path to the root. 
+
+            Input: Q, a list of variables, e.g., ['Winter?', 'Slippery Road?']
+            Out: master_path, a list of paths, e.g. [['Winter?'], ['Winter?', 'Rain?', 'Slippery Road?']]
+       
+        """
+
+        G = self.bn.structure
+        root = [n for n,d in G.in_degree() if d==0]
+        root = ''.join(root)
+        master_path_dict = {}
+        master_path_list = []
+        
+        for q in Q:                        
+            if q == root:              
+                path = [root]           
+                master_path_dict[q] = path
+                master_path_list.append(path)
+            else:
+                for path in networkx.all_simple_paths(G, source=root, target=q):
+                    master_path_list.append(path)
+                    if q not in master_path_dict:
+                        master_path_dict[q] = path
+                    else:
+                        values = master_path_dict.get(q)
+                        new_values = [values, path]
+                        master_path_dict[q] = new_values
+        
+        return master_path_list   
+
+    def get_factors(self, master_path):
+        """ Get the factors of all the variables in a path
+
+            input: master_path, e.g. [['Winter?'], ['Winter?', 'Rain?', 'Slippery Road?']]
+            output: factor_dict, a dictionary that includes the factors of the variables in a path
+        
+        """
+        factor_dict = {}
+        
+        for path in master_path:            
+
+            path = path[:-1]    
+            if len(path) == 1:
+                path=[]
+                      
+            while path:         
+                for i in path:  
+                    idx = 0
+                    f = self.multiplying(path[idx], path[idx+1])   
+                    f = self.summing_out(f, path[idx+1])  
+                    factor_dict[path[idx+1]] = f
+                    path.remove(path[idx])
+                    path.remove(path[idx])
+
+        return factor_dict      
+
+    def multiplying2(self, A, B, C):            
+        """ Multiply the factors of A and B, including a variable C to merge on.
+            
+                input: A and B, which are either variables (e.g., 'Winter?') or factors, and C, a variable to merge on
+
+                output: f, a factor which is a multiplication of A and B
+
+        """
+
         if type(A) == str and type(B) == str:
             cpt_A = self.bn.get_cpt(A)
             cpt_B = self.bn.get_cpt(B)
@@ -179,39 +285,19 @@ class BNReasoner:
         f = f.drop(columns=['p_x', 'p_y'])
         
         return f
-    
-    def multiplying2(self, A, B, first, second):                # input: variable/factor1, variable/factor2, variable to merge on
-        cpt_A = A
-        cpt_B = B
 
-        rows = [True, True, False, False]
-        rows2 = [True, False, True, False]
-        a_values = []
-        b_values = []
+    def summing_out2(self, f, cols, B, var):    
+        """ Sum out B from f.
+            
+            input: f, a factor
+                   cols, the columns to group factor f by
+                   B, the variable to be dropped
+                   var, the variable the factor f belongs to
+
+            output: f, a factor 
         
-        for i in rows:
-            a_values.append(float(cpt_A.loc[cpt_A[first] == i]['p']))
-                
-        for j in rows2:
-            b_values.append(float(cpt_B.loc[cpt_B[second] == j]['p']))
-        
-        f = pd.DataFrame(columns=[first, second, 'p'])
-        f[first] = rows
-        f[second] = rows2
+        """
 
-        p_values = []
-
-        for num1, num2 in zip(a_values, b_values):
-            p_values.append(num1 * num2)
-
-        f['p'] = p_values
-
-    def summing_out(self, f, B):                # keep only B
-        f = f.groupby(B)['p'].sum()
-
-        return f
-
-    def summing_out2(self, f, cols, B, var):               # remove B
         if not var in cols:
             cols.append(var)
         else:
@@ -220,92 +306,74 @@ class BNReasoner:
         f = f.groupby(cols, as_index=False)['p'].sum()
         return f
 
-    def get_path(self, Q):                  # get predecessors of Q up until the root
+    def multiplying3(self, A, B):                # input: variable/factor1, variable/factor2, variable to merge on
+        """ to be used for cross multiplication """
+
+
+        cpt_A = A
+        cpt_B = B
+
+        f = cpt_A.merge(cpt_B, how='cross')
+        print(f)
+
+    def marginal_distribution(self, Q, e):
+        # Get root of the network
         G = self.bn.structure
         root = [n for n,d in G.in_degree() if d==0]
         root = ''.join(root)
-        master_path = []
         
-        for q in Q:                     #Q = ["Winter?", "Rain?", "Slippery Road?"], q = "Winter?"... 
-            if q == root:              
-                path = [root]           
-                master_path.append(path)
-            else:
-                for path in networkx.all_simple_paths(G, source=root, target=q):
-                    master_path.append(path)
-                        
-        return master_path
-
-    def get_factor_dict(self, master_path): # [['Winter?'], ['Winter?', 'Rain?'], ['Winter?', 'Rain?', 'Slippery Road?']]  
-        factor_dict = {}
-        
-        for path in master_path:            # e.g. ['Winter?']
-
-            path = path[:-1]    
-            if len(path) == 1:
-                path=[]
-                      
-            while path:         
-                for i in path:  
-                    idx = 0
-                    f = self.multiplying(path[idx], path[idx+1], path[idx])   
-                    f = self.summing_out(f, path[idx+1])                      
-                    factor_dict[path[idx+1]] = f
-                    path.remove(path[idx])
-                    path.remove(path[idx])
-
-        return factor_dict
-
-    def marginal_distribution(self, Q, e): 
-        G = self.bn.structure
-        root = [n for n,d in G.in_degree() if d==0]
-        root = ''.join(root)
-        f = None
+        k_factors = {}
         q = None
-        master_path = self.get_path(Q)
-        master_f = {}
+        f = None
 
-        for q in Q: 
+        # Get the paths
+        master_path = self.get_path(Q)
+
+        # Iterative over all variables in the query, and append their cpt's to k_factors
+        for q in Q:
             if q == root:
-                master_f[q] = self.bn.get_cpt(root)
-                #print(self.bn.get_cpt(root))
+                k_factors[q] = self.bn.get_cpt(root)
             else:
                 q = q
-                f = self.bn.get_cpt(q) # factor 'winter, rains'
+                f = self.bn.get_cpt(q) # e.g., "Rains?"
 
-                cols = list(f.columns)
-                cols = cols[:-2] # to remove
-                length = cols
+                cols = list(f.columns)  # e.g., ["Winter?", "Rains?", "p"]
+                cols = cols[:-2]        # e.g., ["Winter?"]
+                length = cols           
 
-                if cols[0] == root:
+                if cols[0] == root:     # If the root is in the cpt of q, that means there is a direct connection: we can immediately multiply and sum out
                     root_cpt = self.bn.get_cpt(root)
-                    f = self.multiplying(f, root_cpt, root)
+                    f = self.multiplying(root_cpt, f)
                     f = self.summing_out(f, q)
-                    master_f[q] = f
-                else:
-                    factor_dict = self.get_factor_dict(master_path)
-                    for i in range(0, len(length)):
+                    k_factors[q] = f
+                
+                else:                                                           # If the root is not in the cpt of q:
+                    factor_dict = self.get_factors(master_path)                 # get the cpts of the variables in the path (this function excludes the root)
+
+                    for i in range(0, len(length)):                             # Iteratively multiply/sum out
                         key = cols[0]
-                        f = self.multiplying(f, factor_dict[key], key)
+                        f = self.multiplying2(factor_dict[key], f, key)
                         cols.remove(key)
                         f = self.summing_out2(f, cols, key, q)
-                        master_f[q] = f
-        
-        if len(master_f) == 1:
-            print(master_f)
+                        k_factors[q] = f
+            
+        if len(k_factors) == 1:                                                 # Solution found
+            print(k_factors)
         else:
-            for i in range(0, len(master_f)):
-                first_key = next(iter(master_f))
-                f = master_f[first_key]
-                if 1 < len(master_f):
-                    second_key = list(master_f.keys())[1]
-                    print("second", second_key)
-                    second = master_f[second_key]
-                    print(second)
-                    master_f.pop(first_key)
-            #f = self.multiplying2(f, second, first_key, second_key)
-                f = self.multiplying2(f, second, first_key, second_key)
-        print(f)
+            while k_factors:                                                    # Otherwise, we still need to multiply what's in k_factors
+                first_key = next(iter(k_factors))
+                f = k_factors[first_key]
+                
+
+                second_key = list(k_factors.keys())[1]
+    
+                f2 = k_factors[second_key]
+                k_factors.pop(first_key, second_key)
+
+
+################################
+### Task 1e
+################################
 
     def maxing_out(self, cpt, key=None):
         if key is None:
