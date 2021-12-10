@@ -1,7 +1,9 @@
 from itertools import combinations
+from os import R_OK, path
 from typing import Union
 import networkx
 from BayesNet import BayesNet
+import pandas as pd
 
 
 class BNReasoner:
@@ -76,7 +78,6 @@ class BNReasoner:
             # add an edge between every pair of non-adjacent neighbors
             if len(dict_of_neighbors[pi[-1]]) >= 2:
                 pairwise_edges = list(combinations(dict_of_neighbors[pi[-1]], 2))
-                print(pairwise_edges)
                 [G.add_edge(*pair) for pair in pairwise_edges]
 
             # remove node from graph and variable list
@@ -164,12 +165,213 @@ class BNReasoner:
 
         return self
 
+    def multiplying(self, A, B, C):                # input: variable/factor1, variable/factor2, variable to merge on
+        if type(A) == str and type(B) == str:
+            cpt_A = self.bn.get_cpt(A)
+            cpt_B = self.bn.get_cpt(B)
+            C = A
+        else:
+            cpt_A = A
+            cpt_B = B
+
+        f = cpt_A.merge(cpt_B, on=C) 
+        f['p'] = f['p_x'] * f['p_y']
+        f = f.drop(columns=['p_x', 'p_y'])
+        
+        return f
+    
+    def multiplying2(self, A, B, first, second):                # input: variable/factor1, variable/factor2, variable to merge on
+        cpt_A = A
+        cpt_B = B
+
+        rows = [True, True, False, False]
+        rows2 = [True, False, True, False]
+        a_values = []
+        b_values = []
+        
+        for i in rows:
+            a_values.append(float(cpt_A.loc[cpt_A[first] == i]['p']))
+                
+        for j in rows2:
+            b_values.append(float(cpt_B.loc[cpt_B[second] == j]['p']))
+        
+        f = pd.DataFrame(columns=[first, second, 'p'])
+        f[first] = rows
+        f[second] = rows2
+
+        p_values = []
+
+        for num1, num2 in zip(a_values, b_values):
+            p_values.append(num1 * num2)
+
+        f['p'] = p_values
+
+    def summing_out(self, f, B):                # keep only B
+        f = f.groupby(B)['p'].sum()
+
+        return f
+
+    def summing_out2(self, f, cols, B, var):               # remove B
+        if not var in cols:
+            cols.append(var)
+        else:
+            pass
+        f = f.drop(columns=B)
+        f = f.groupby(cols, as_index=False)['p'].sum()
+        return f
+
+    def get_path(self, Q):                  # get predecessors of Q up until the root
+        G = self.bn.structure
+        root = [n for n,d in G.in_degree() if d==0]
+        root = ''.join(root)
+        master_path = []
+        
+        for q in Q:                     #Q = ["Winter?", "Rain?", "Slippery Road?"], q = "Winter?"... 
+            if q == root:              
+                path = [root]           
+                master_path.append(path)
+            else:
+                for path in networkx.all_simple_paths(G, source=root, target=q):
+                    master_path.append(path)
+                        
+        return master_path
+
+    def get_factor_dict(self, master_path): # [['Winter?'], ['Winter?', 'Rain?'], ['Winter?', 'Rain?', 'Slippery Road?']]  
+        factor_dict = {}
+        
+        for path in master_path:            # e.g. ['Winter?']
+
+            path = path[:-1]    
+            if len(path) == 1:
+                path=[]
+                      
+            while path:         
+                for i in path:  
+                    idx = 0
+                    f = self.multiplying(path[idx], path[idx+1], path[idx])   
+                    f = self.summing_out(f, path[idx+1])                      
+                    factor_dict[path[idx+1]] = f
+                    path.remove(path[idx])
+                    path.remove(path[idx])
+
+        return factor_dict
+
+    def marginal_distribution(self, Q, e): 
+        G = self.bn.structure
+        root = [n for n,d in G.in_degree() if d==0]
+        root = ''.join(root)
+        f = None
+        q = None
+        master_path = self.get_path(Q)
+        master_f = {}
+
+        for q in Q: 
+            if q == root:
+                master_f[q] = self.bn.get_cpt(root)
+                #print(self.bn.get_cpt(root))
+            else:
+                q = q
+                f = self.bn.get_cpt(q) # factor 'winter, rains'
+
+                cols = list(f.columns)
+                cols = cols[:-2] # to remove
+                length = cols
+
+                if cols[0] == root:
+                    root_cpt = self.bn.get_cpt(root)
+                    f = self.multiplying(f, root_cpt, root)
+                    f = self.summing_out(f, q)
+                    master_f[q] = f
+                else:
+                    factor_dict = self.get_factor_dict(master_path)
+                    for i in range(0, len(length)):
+                        key = cols[0]
+                        f = self.multiplying(f, factor_dict[key], key)
+                        cols.remove(key)
+                        f = self.summing_out2(f, cols, key, q)
+                        master_f[q] = f
+        
+        if len(master_f) == 1:
+            print(master_f)
+        else:
+            for i in range(0, len(master_f)):
+                first_key = next(iter(master_f))
+                f = master_f[first_key]
+                if 1 < len(master_f):
+                    second_key = list(master_f.keys())[1]
+                    print("second", second_key)
+                    second = master_f[second_key]
+                    print(second)
+                    master_f.pop(first_key)
+            #f = self.multiplying2(f, second, first_key, second_key)
+                f = self.multiplying2(f, second, first_key, second_key)
+        print(f)
+
+    def maxing_out(self, cpt, key=None):
+        if key is None:
+            return cpt.loc[lambda d: d["p"] == d["p"].max()]
+        else:
+            return cpt.groupby(key).max().reset_index()
+
+    def multiply_new(self, cpt_left: pd.DataFrame, cpt_right: pd.DataFrame, key: str) -> pd.DataFrame:
+        if type(cpt_left) != pd.DataFrame:
+            raise (TypeError(f"{cpt_left} should be of type pd.DataFrame"))
+        if type(cpt_right) != pd.DataFrame:
+            raise (TypeError(f"{cpt_right} should be of type pd.DataFrame"))
+
+        return (
+            cpt_left
+                .merge(cpt_right, on=key)
+                .assign(p=lambda d: d["p_x"] * d["p_y"])
+                .drop(["p_x", "p_y"], axis=1)
+        )
+
+    def calculate_MAP(self):
+        ...
+
+    def calculate_MPE(self, e):
+        """ Calculating the Most Probable Explanations in a Bayesian Network. """
+        self.prune_edges(e)
+
+        # Remove rows were evidence is incompatible for tables <= 2
+        cpts = self.bn.get_all_cpts()
+        for node, cpt in cpts.items():
+            if len(cpt.columns) <= 2:
+                for evidence in e:
+                    if evidence[0] in cpt.columns:
+                        cpt = cpt.loc[lambda d: d[evidence[0]] == evidence[1]]
+                self.bn.update_cpt(node, cpt)
+
+        Q = self.bn.get_all_variables()
+        pi = self.min_degree_order()
+
+        print("Q", Q)
+        print("pi", pi)
+
+        S = self.bn.get_all_cpts()
+
+        # cpt_ = self.maxing_out(S["Wet Grass?"], key="Wet Grass?")
+        # print(cpt_)
+
+        for var in pi[1:]:
+            cpt_with_var = [key for key, value in S.items() if var in value.columns]
+            print(cpt_with_var)
+            if len(cpt_with_var) > 1:
+                foo = self.multiply_new(S[cpt_with_var[0]], S[cpt_with_var[1]], var)
+                print(foo)
+            # S[var] = self.maxing_out(S[var])
+            # print(S[var])
+            break
+
 
 if __name__ == "__main__":
     reasoner = BNReasoner(net="./testing/lecture_example.BIFXML")
 
-    Q = ["Wet Grass?"]
+    Q = ["Winter?", "Slippery Road?"]
     e = [("Winter?", True), ("Rain?", False)]
+    #reasoner.get_path(Q)
+    # reasoner.prune_network(Q, e)
+    # print(reasoner.bn.get_all_cpts())
+    # reasoner.marginal_distribution(Q, e)
 
-    reasoner.prune_network(Q, e)
-    print(reasoner.bn.get_all_cpts())
+    reasoner.calculate_MPE(e)
