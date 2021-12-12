@@ -1,9 +1,12 @@
+from collections import Counter
 from itertools import combinations
+from typing import Union, List
+
 from os import R_OK, path
-from typing import Union
-import networkx
-from BayesNet import BayesNet
+import networkx as nx
 import pandas as pd
+
+from BayesNet import BayesNet
 
 
 class BNReasoner:
@@ -19,34 +22,37 @@ class BNReasoner:
         else:
             self.bn = net
 
-    # TODO: This is where your methods should go
+    ################################
+    ### Task 1a
+    ################################
 
-    def is_sequential(self, path):
+    def _is_sequential(self, path):
         _1, _2, _3 = path
         return _2 in self.bn.get_children(_1) and _3 in self.bn.get_children(_2)
 
-    def is_divergent(self, path):
+    def _is_divergent(self, path):
         _1, _2, _3 = path
         return self.bn.get_children(_2) == [_1, _3]
 
-    def is_convergent(self, path):
+    def _is_convergent(self, path):
         _1, _2, _3 = path
         return _2 in self.bn.get_children(_1) and _2 in self.bn.get_children(_3)
 
-    def is_path_closed(self, path, z):
-        if self.is_sequential(path):
+    def _is_path_closed(self, path, z):
+        if self._is_sequential(path):
             return True if z == path[1] else False
 
-        elif self.is_divergent(path):
+        elif self._is_divergent(path):
             return True if z == path[1] else False
 
-        elif self.is_convergent(path):
+        elif self._is_convergent(path):
             return True if z not in path else False
 
     def d_seperable(self, x, z, y):
+        """ Check if combination is d-seperable. """
         # Create an undirected networkx graph to calculate all possible paths from x to y
         nx = self.bn.structure.to_undirected()
-        all_paths = list(networkx.algorithms.simple_paths.all_simple_paths(nx, x, y))
+        all_paths = list(nx.algorithms.simple_paths.all_simple_paths(nx, x, y))
 
         # Check if each path has a closed sub_path
         window_size = 3
@@ -54,25 +60,28 @@ class BNReasoner:
         for path in all_paths:
             for i in range(len(path) - window_size + 1):
                 sub_path = path[i: i + window_size]
-                is_closed = self.is_path_closed(sub_path, z)
+                is_closed = self._is_path_closed(sub_path, z)
                 if is_closed:
                     closed_paths.append(path)
                     break
 
-        if len(closed_paths) == len(all_paths):
-            return True
-        else:
-            return False
+        return True if len(closed_paths) == len(all_paths) else False
+
+    ################################
+    ### Task 1b
+    ################################
 
     def min_degree_order(self):
+        """ Min degree ordering. """
         G = self.bn.get_interaction_graph()
         X = self.bn.get_all_variables()
 
         pi = []
         for i in range(len(X)):
             # sort variables on number of neighbors and append minimum to pi
-            dict_of_neighbors = {var: list(networkx.neighbors(G, var)) for var in X}
-            sorted_neighbors = sorted([(key, len(value)) for key, value in dict_of_neighbors.items()], key=lambda x: x[1])
+            dict_of_neighbors = {var: list(nx.neighbors(G, var)) for var in X}
+            sorted_neighbors = sorted([(key, len(value)) for key, value in dict_of_neighbors.items()],
+                                      key=lambda x: x[1])
             pi.append(sorted_neighbors[0][0])
 
             # add an edge between every pair of non-adjacent neighbors
@@ -87,17 +96,19 @@ class BNReasoner:
         return pi
 
     def min_fill_order(self):
+        """ Min fill ordering. """
         G = self.bn.get_interaction_graph()
         X = self.bn.get_all_variables()
 
         pi = []
         for i in range(len(X)):
-            dict_of_neighbors = {var: list(networkx.neighbors(G, var)) for var in X}
+            dict_of_neighbors = {var: list(nx.neighbors(G, var)) for var in X}
 
             edges_to_add = []
             for var in X:
                 pairwise_edges = list(combinations(dict_of_neighbors[var], 2))
-                n_edges = sum([pair not in G.edges for pair in pairwise_edges])  # maybe add: pair[::-1] not in G_copy.edges
+                n_edges = sum(
+                    [pair not in G.edges for pair in pairwise_edges])  # maybe add: pair[::-1] not in G_copy.edges
                 edges_to_add.append((var, n_edges))
 
             edges_to_add = sorted(edges_to_add, key=lambda x: x[1])
@@ -114,6 +125,10 @@ class BNReasoner:
             X.remove(pi[-1])
 
         return pi
+
+    ################################
+    ### Task 1c
+    ################################
 
     def prune_nodes(self, Q, e):
         """ Pruning all leaf nodes not in Q or e. """
@@ -150,9 +165,9 @@ class BNReasoner:
         # Update CPT tables
         cpts = self.bn.get_all_cpts()
         for node, cpt in cpts.items():
-            if len(cpt.columns) > 2:
+            if len(cpt.columns) > 2:  # TODO: double check if this is necessary
                 for evidence in e:
-                    if evidence[0] not in cpt.columns[-2]:
+                    if evidence[0] not in cpt.columns[-2]:  # TODO: double check if this is necessary
                         if evidence[0] in cpt.columns:
                             cpt = cpt.loc[lambda d: d[evidence[0]] == evidence[1]]
                 self.bn.update_cpt(node, cpt)
@@ -164,216 +179,115 @@ class BNReasoner:
         self.prune_edges(e)
 
         return self
-################################
-### Task 1d
-################################
 
-    def summing_out(self, f, B):                
-        """ Sum out everything from f except for B 
-            
-            input: f, a factor
-                   B, a variable
+    ################################
+    ### Task 1d
+    ################################
 
-            output: f, a factor 
-        
-        """
+    def summing_out(self, cpt: pd.DataFrame, key: str) -> pd.DataFrame:
+        """ Summing out or marginalizing a cpt for a given key. """
+        if type(cpt) != pd.DataFrame:
+            raise (TypeError(f"{cpt} should be of type pd.DataFrame"))
 
-        f = f.groupby(B)['p'].sum()
-        
-        return f
+        cols_to_group = list(cpt.columns)
+        cols_to_group.remove(key)
+        cols_to_group.remove("p")
+        return (
+            cpt
+            .drop(key, axis=1)
+            .groupby(cols_to_group)
+            .sum()
+            .reset_index()
+        )
 
-    def multiplying(self, A, B):                
-        """ Multiply the factors of A and B 
-        
-            input: A and B, which are either variables (e.g., 'Winter?') or factors
+    @staticmethod
+    def _find_column_intersection(cpt_left: pd.DataFrame, cpt_right: pd.DataFrame) -> list:
+        """ Find intersection of column names between to cpt dataframes. """
+        left = set(list(cpt_left.columns)[:-1])
+        right = set(list(cpt_right.columns)[:-1])
 
-            output: f, a factor which is a multiplication of A and B
+        return list(left.intersection(right))
 
-        """
+    def multiplying_factors(self, cpt_left: pd.DataFrame, cpt_right: pd.DataFrame, key=None) -> pd.DataFrame:
+        if type(cpt_left) != pd.DataFrame:
+            raise (TypeError(f"{cpt_left} should be of type pd.DataFrame"))
+        if type(cpt_right) != pd.DataFrame:
+            raise (TypeError(f"{cpt_right} should be of type pd.DataFrame"))
 
-        if type(A) == str and type(B) == str:           # if the input is only a variable
-            cpt_A = self.bn.get_cpt(A)
-            cpt_B = self.bn.get_cpt(B)
-            C = A
-        else:                                           # if the input is already a factor
-            cpt_A = A
-            cpt_B = B
-            C = list(cpt_A.keys())[-2]
+        if key is None:
+            key = self._find_column_intersection(cpt_left, cpt_right)
 
-        f = cpt_A.merge(cpt_B, on=C) 
-        f['p'] = f['p_x'] * f['p_y']
-        f = f.drop(columns=['p_x', 'p_y'])
-        
-        return f      
+        return (
+            cpt_left
+            .merge(cpt_right, on=key)
+            .assign(p=lambda d: d["p_x"] * d["p_y"])
+            .drop(["p_x", "p_y"], axis=1)
+        )
 
-    def get_path(self, Q):   
-        """ For all q in Q, get the path to the root. 
+    def marginal_distribution(self, Q: Union[List, str], e=None):
+        """ Marginal distribution for a query Q and possible evidence e. """
 
-            Input: Q, a list of variables, e.g., ['Winter?', 'Slippery Road?']
-            Out: master_path, a list of paths, e.g. [['Winter?'], ['Winter?', 'Rain?', 'Slippery Road?']]
-       
-        """
+        # input validation: turn Q into a list
+        if type(Q) == str:
+            Q = [Q]
 
-        G = self.bn.structure
-        root = [n for n,d in G.in_degree() if d==0]
-        root = ''.join(root)
-        master_path_dict = {}
-        master_path_list = []
-        
-        for q in Q:                        
-            if q == root:              
-                path = [root]           
-                master_path_dict[q] = path
-                master_path_list.append(path)
-            else:
-                for path in networkx.all_simple_paths(G, source=root, target=q):
-                    master_path_list.append(path)
-                    if q not in master_path_dict:
-                        master_path_dict[q] = path
-                    else:
-                        values = master_path_dict.get(q)
-                        new_values = [values, path]
-                        master_path_dict[q] = new_values
-        
-        return master_path_list   
+        S = self.bn.get_all_cpts()
+        pi = self.bn.get_all_variables()
+        [pi.remove(q) for q in Q]
+        # print("pi", pi)
 
-    def get_factors(self, master_path):
-        """ Get the factors of all the variables in a path
+        if e is not None:
+            print("Get all CPTs updated according to evidence e")
+            for key, value in S.items():
+                S[key] = self.bn.get_compatible_instantiations_table(e, value)
 
-            input: master_path, e.g. [['Winter?'], ['Winter?', 'Rain?', 'Slippery Road?']]
-            output: factor_dict, a dictionary that includes the factors of the variables in a path
-        
-        """
-        factor_dict = {}
-        
-        for path in master_path:            
+        # Edge case 1: len(Q) == 1 and Q has no parents: return cpt of Q
+        if len(Q) == 1 and nx.algorithms.dag.ancestors(self.bn.structure, Q[0]) == set():
+            return S[Q[0]].sort_values(Q[0], ascending=False).reset_index(drop=True)
 
-            path = path[:-1]    
-            if len(path) == 1:
-                path=[]
-                      
-            while path:         
-                for i in path:  
-                    idx = 0
-                    f = self.multiplying(path[idx], path[idx+1])   
-                    f = self.summing_out(f, path[idx+1])  
-                    factor_dict[path[idx+1]] = f
-                    path.remove(path[idx])
-                    path.remove(path[idx])
+        # Edge case 2: Q == X: return all cpts multiplied with each other
+        if Counter(Q) == Counter(list(S.keys())):
+            print("Q == X, so just multiplying all and no summing out")
+            cpt_res = S[Q[0]]
+            for i in range(1, len(Q)):
+                cpt_res = self.multiplying_factors(cpt_res, S[Q[i]])
+            return cpt_res.sort_values(Q, ascending=False).reset_index(drop=True)
 
-        return factor_dict      
+        cpt_res = None
+        for var in pi:
+            var_map = {key: list(value.columns)[:-1] for key, value in S.items()}  # [:-1] to remove "p" from the columns list
+            var_in_cpts = [key for key, value in var_map.items() if var in value]
+            # print("var", var)
+            # print("var_in_cpts", var_in_cpts)
 
-    def multiplying2(self, A, B, C):            
-        """ Multiply the factors of A and B, including a variable C to merge on.
-            
-                input: A and B, which are either variables (e.g., 'Winter?') or factors, and C, a variable to merge on
+            # initialize cpt_res to first cpt
+            if cpt_res is None:
+                var_in_cpts.remove(var)
+                cpt_res = S[var]
+                S.pop(var, None)  # remove cpt to prevent that it gets multiplied more than once
 
-                output: f, a factor which is a multiplication of A and B
+            # multiply step
+            for mul_var in var_in_cpts:
+                # print("mul", mul_var)
+                cpt_res = self.multiplying_factors(cpt_res, S[mul_var])
+                S.pop(mul_var, None)  # remove cpt to prevent that it gets multiplied more than once
 
-        """
+            # summing-out step
+            # print("sum", var)
+            cpt_res = self.summing_out(cpt_res, key=var)
 
-        if type(A) == str and type(B) == str:
-            cpt_A = self.bn.get_cpt(A)
-            cpt_B = self.bn.get_cpt(B)
-            C = A
-        else:
-            cpt_A = A
-            cpt_B = B
+        # normalize probability values in the case of evidence
+        if e is not None:
+            cpt_res = cpt_res.assign(p=lambda d: d["p"] / d["p"].sum())
 
-        f = cpt_A.merge(cpt_B, on=C) 
-        f['p'] = f['p_x'] * f['p_y']
-        f = f.drop(columns=['p_x', 'p_y'])
-        
-        return f
+        # sorting for nicer representation
+        cpt_res = cpt_res.sort_values(Q, ascending=False).reset_index(drop=True)
 
-    def summing_out2(self, f, cols, B, var):    
-        """ Sum out B from f.
-            
-            input: f, a factor
-                   cols, the columns to group factor f by
-                   B, the variable to be dropped
-                   var, the variable the factor f belongs to
+        return cpt_res
 
-            output: f, a factor 
-        
-        """
-
-        if not var in cols:
-            cols.append(var)
-        else:
-            pass
-        f = f.drop(columns=B)
-        f = f.groupby(cols, as_index=False)['p'].sum()
-        return f
-
-    def multiplying3(self, A, B):                # input: variable/factor1, variable/factor2, variable to merge on
-        """ to be used for cross multiplication """
-
-
-        cpt_A = A
-        cpt_B = B
-
-        f = cpt_A.merge(cpt_B, how='cross')
-        print(f)
-
-    def marginal_distribution(self, Q, e):
-        # Get root of the network
-        G = self.bn.structure
-        root = [n for n,d in G.in_degree() if d==0]
-        root = ''.join(root)
-        
-        k_factors = {}
-        q = None
-        f = None
-
-        # Get the paths
-        master_path = self.get_path(Q)
-
-        # Iterative over all variables in the query, and append their cpt's to k_factors
-        for q in Q:
-            if q == root:
-                k_factors[q] = self.bn.get_cpt(root)
-            else:
-                q = q
-                f = self.bn.get_cpt(q) # e.g., "Rains?"
-
-                cols = list(f.columns)  # e.g., ["Winter?", "Rains?", "p"]
-                cols = cols[:-2]        # e.g., ["Winter?"]
-                length = cols           
-
-                if cols[0] == root:     # If the root is in the cpt of q, that means there is a direct connection: we can immediately multiply and sum out
-                    root_cpt = self.bn.get_cpt(root)
-                    f = self.multiplying(root_cpt, f)
-                    f = self.summing_out(f, q)
-                    k_factors[q] = f
-                
-                else:                                                           # If the root is not in the cpt of q:
-                    factor_dict = self.get_factors(master_path)                 # get the cpts of the variables in the path (this function excludes the root)
-
-                    for i in range(0, len(length)):                             # Iteratively multiply/sum out
-                        key = cols[0]
-                        f = self.multiplying2(factor_dict[key], f, key)
-                        cols.remove(key)
-                        f = self.summing_out2(f, cols, key, q)
-                        k_factors[q] = f
-            
-        if len(k_factors) == 1:                                                 # Solution found
-            print(k_factors)
-        else:
-            while k_factors:                                                    # Otherwise, we still need to multiply what's in k_factors
-                first_key = next(iter(k_factors))
-                f = k_factors[first_key]
-                
-
-                second_key = list(k_factors.keys())[1]
-    
-                f2 = k_factors[second_key]
-                k_factors.pop(first_key, second_key)
-
-
-################################
-### Task 1e
-################################
+    ################################
+    ### Task 1e
+    ################################
 
     def maxing_out(self, cpt, key=None):
         if key is None:
@@ -435,11 +349,8 @@ class BNReasoner:
 if __name__ == "__main__":
     reasoner = BNReasoner(net="./testing/lecture_example.BIFXML")
 
-    Q = ["Winter?", "Slippery Road?"]
-    e = [("Winter?", True), ("Rain?", False)]
-    #reasoner.get_path(Q)
-    # reasoner.prune_network(Q, e)
-    # print(reasoner.bn.get_all_cpts())
-    # reasoner.marginal_distribution(Q, e)
+    Q = ["Wet Grass?", "Slippery Road?"]
+    e = pd.Series((True, False), index=["Winter?", "Sprinkler?"])
 
-    reasoner.calculate_MPE(e)
+    res = reasoner.marginal_distribution(Q, e)
+    print(res)
